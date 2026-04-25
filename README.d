@@ -6,20 +6,6 @@ Telegram channel within seconds of being posted — using a **webhook** approach
 
 ---
 
-## 📁 Project Structure
-
-```
-tg-autodelete-bot/
-├── bot.py              # Main FastAPI app (webhook handler)
-├── setup_webhook.py    # Run once to register webhook with Telegram
-├── requirements.txt
-├── Procfile            # For deployment (mangoi.in / Heroku-style)
-├── .env.example        # Copy to .env and fill values
-└── README.md
-```
-
----
-
 ## ⚙️ Setup
 
 ### 1. Create your bot
