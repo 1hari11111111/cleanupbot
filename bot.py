@@ -6,10 +6,7 @@ from typing import Optional
 from fastapi import FastAPI, Request, Header, HTTPException
 from contextlib import asynccontextmanager
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s"
-)
+logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
 log = logging.getLogger(__name__)
 
 BOT_TOKEN       = os.environ["BOT_TOKEN"]
@@ -26,7 +23,7 @@ DELETABLE_TYPES = {
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    log.info(f"✅ Bot started! Watching channel: {DUMP_CHANNEL_ID}")
+    log.info(f"Bot started! Watching channel: {DUMP_CHANNEL_ID}")
     yield
 
 app = FastAPI(lifespan=lifespan)
@@ -40,9 +37,9 @@ async def delete_message(chat_id: int, message_id: int):
         )
     result = resp.json()
     if result.get("ok"):
-        log.info(f"✅ Deleted message {message_id} from chat {chat_id}")
+        log.info(f"Deleted message {message_id} from chat {chat_id}")
     else:
-        log.warning(f"⚠️ Failed to delete {message_id}: {result.get('description')}")
+        log.warning(f"Failed to delete {message_id}: {result.get('description')}")
 
 async def schedule_delete(chat_id: int, message_id: int, delay: int):
     await asyncio.sleep(delay)
@@ -60,41 +57,33 @@ async def webhook(
     x_telegram_bot_api_secret_token: Optional[str] = Header(default=None)
 ):
     if x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
-        log.warning("❌ Invalid secret token — rejected request")
         raise HTTPException(status_code=403, detail="Invalid secret token")
 
     update = await request.json()
-
-    # 🔍 DEBUG: log the FULL raw update
-    log.info(f"📩 RAW UPDATE: {update}")
+    log.info(f"Update: {update}")
 
     message = update.get("channel_post") or update.get("message")
-
     if not message:
-        log.info("⚠️ No message/channel_post in update — ignoring")
         return {"ok": True}
 
     chat_id    = message["chat"]["id"]
     message_id = message["message_id"]
-    chat_title = message["chat"].get("title", "unknown")
 
-    # 🔍 DEBUG: show chat_id vs expected
-    log.info(f"📬 From chat_id={chat_id} ('{chat_title}'), DUMP_CHANNEL_ID={DUMP_CHANNEL_ID}")
+    log.info(f"Chat ID received: {chat_id}, expected: {DUMP_CHANNEL_ID}")
 
     if chat_id != DUMP_CHANNEL_ID:
-        log.warning(f"🚫 ID MISMATCH — not deleting! Got {chat_id}, expected {DUMP_CHANNEL_ID}")
+        log.warning(f"Ignoring chat {chat_id}")
         return {"ok": True}
 
     media_type = get_message_type(message)
-
     if media_type:
-        log.info(f"🎬 {media_type.upper()} detected (msg {message_id}) — deleting in {DELETE_AFTER}s")
+        log.info(f"{media_type.upper()} detected — deleting in {DELETE_AFTER}s")
         asyncio.create_task(schedule_delete(chat_id, message_id, DELETE_AFTER))
     else:
-        log.info(f"💬 Text message {message_id} — skipping")
+        log.info(f"Text message — skipping")
 
     return {"ok": True}
 
 @app.get("/")
 async def health():
-    return {"status": "running", "bot": "Leech Dump Auto-Delete", "watching": DUMP_CHANNEL_ID}
+    return {"status": "running", "watching": DUMP_CHANNEL_ID}
