@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, ContextTypes, filters
 
-BOT_TOKEN = "8702676707:AAFd11ZFko6cyt7KAyc9dmlsk3Qgjb8RuKY
+BOT_TOKEN = "8702676707:AAFd11ZFko6cyt7KAyc9dmlsk3Qgjb8RuKY"
 
 app = FastAPI()
 
