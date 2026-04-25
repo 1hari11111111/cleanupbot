@@ -3,14 +3,15 @@ import asyncio
 import logging
 import httpx
 from typing import Optional
-from fastapi import FastAPI, Request, Header, HTTPException
-from contextlib import asynccontextmanager
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s | %(levelname)s | %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
 log = logging.getLogger(__name__)
 
+# ─── CONFIG ─────────────────────────────────────────────────────────────────
 BOT_TOKEN       = os.environ["BOT_TOKEN"]
-WEBHOOK_SECRET  = os.environ["WEBHOOK_SECRET"]
 DUMP_CHANNEL_ID = int(os.environ["DUMP_CHANNEL_ID"])
 DELETE_AFTER    = int(os.getenv("DELETE_AFTER", "5"))
 
@@ -21,29 +22,23 @@ DELETABLE_TYPES = {
     "voice", "video_note", "animation", "sticker"
 }
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    log.info(f"Bot started! Watching channel: {DUMP_CHANNEL_ID}")
-    yield
-
-app = FastAPI(lifespan=lifespan)
-
-async def delete_message(chat_id: int, message_id: int):
-    async with httpx.AsyncClient() as client:
-        resp = await client.post(
-            f"{TELEGRAM_API}/deleteMessage",
-            json={"chat_id": chat_id, "message_id": message_id},
-            timeout=10
-        )
+# ─── HELPERS ────────────────────────────────────────────────────────────────
+async def delete_message(client: httpx.AsyncClient, chat_id: int, message_id: int):
+    resp = await client.post(
+        f"{TELEGRAM_API}/deleteMessage",
+        json={"chat_id": chat_id, "message_id": message_id},
+        timeout=10
+    )
     result = resp.json()
     if result.get("ok"):
-        log.info(f"Deleted message {message_id} from chat {chat_id}")
+        log.info(f"✅ Deleted message {message_id} from chat {chat_id}")
     else:
-        log.warning(f"Failed to delete {message_id}: {result.get('description')}")
+        log.warning(f"⚠️ Failed to delete {message_id}: {result.get('description')}")
 
 async def schedule_delete(chat_id: int, message_id: int, delay: int):
     await asyncio.sleep(delay)
-    await delete_message(chat_id, message_id)
+    async with httpx.AsyncClient() as client:
+        await delete_message(client, chat_id, message_id)
 
 def get_message_type(message: dict) -> Optional[str]:
     for t in DELETABLE_TYPES:
@@ -51,39 +46,64 @@ def get_message_type(message: dict) -> Optional[str]:
             return t
     return None
 
-@app.post("/webhook")
-async def webhook(
-    request: Request,
-    x_telegram_bot_api_secret_token: Optional[str] = Header(default=None)
-):
-    if x_telegram_bot_api_secret_token != WEBHOOK_SECRET:
-        raise HTTPException(status_code=403, detail="Invalid secret token")
-
-    update = await request.json()
-    log.info(f"Update: {update}")
-
-    message = update.get("channel_post") or update.get("message")
-    if not message:
-        return {"ok": True}
-
+async def process_message(message: dict):
     chat_id    = message["chat"]["id"]
     message_id = message["message_id"]
 
-    log.info(f"Chat ID received: {chat_id}, expected: {DUMP_CHANNEL_ID}")
-
     if chat_id != DUMP_CHANNEL_ID:
-        log.warning(f"Ignoring chat {chat_id}")
-        return {"ok": True}
+        return
 
     media_type = get_message_type(message)
     if media_type:
-        log.info(f"{media_type.upper()} detected — deleting in {DELETE_AFTER}s")
+        log.info(f"🎬 {media_type.upper()} detected (msg {message_id}) — deleting in {DELETE_AFTER}s")
         asyncio.create_task(schedule_delete(chat_id, message_id, DELETE_AFTER))
     else:
-        log.info(f"Text message — skipping")
+        log.info(f"💬 Text message {message_id} — skipping")
 
-    return {"ok": True}
+# ─── POLLING LOOP ───────────────────────────────────────────────────────────
+async def poll():
+    offset = 0
+    log.info(f"🤖 Bot started in POLLING mode! Watching channel: {DUMP_CHANNEL_ID}")
 
-@app.get("/")
-async def health():
-    return {"status": "running", "watching": DUMP_CHANNEL_ID}
+    # First delete any existing webhook
+    async with httpx.AsyncClient() as client:
+        await client.post(f"{TELEGRAM_API}/deleteWebhook", json={"drop_pending_updates": True})
+        log.info("🔗 Webhook cleared. Polling started...")
+
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                resp = await client.get(
+                    f"{TELEGRAM_API}/getUpdates",
+                    params={
+                        "offset": offset,
+                        "timeout": 30,
+                        "allowed_updates": ["message", "channel_post"]
+                    },
+                    timeout=40
+                )
+                data = resp.json()
+
+                if not data.get("ok"):
+                    log.warning(f"Bad response: {data}")
+                    await asyncio.sleep(5)
+                    continue
+
+                updates = data.get("result", [])
+
+                for update in updates:
+                    offset = update["update_id"] + 1
+                    message = update.get("channel_post") or update.get("message")
+                    if message:
+                        await process_message(message)
+
+            except httpx.ReadTimeout:
+                # Normal for long polling — just continue
+                continue
+            except Exception as e:
+                log.error(f"❌ Error: {e}")
+                await asyncio.sleep(5)
+
+# ─── MAIN ───────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    asyncio.run(poll())
